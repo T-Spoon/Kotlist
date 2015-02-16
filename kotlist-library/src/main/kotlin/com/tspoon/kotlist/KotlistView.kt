@@ -12,15 +12,20 @@ import java.util.HashMap
 import java.util.ArrayList
 import android.graphics.Rect
 import android.support.v7.widget.RecyclerView
+import android.view.ViewGroup
+import android.database.DataSetObserver
+import android.database.DataSetObservable
+import com.tspoon.kotlist.KotlistView.RecyclerAdapter
+import com.tspoon.kotlist.library.R
 
-class KotlistView(context: Context, attrs: AttributeSet) : AdapterView<ListAdapter>(context, attrs) {
+class KotlistView(context: Context, attrs: AttributeSet) : AdapterView<RecyclerAdapter>(context, attrs) {
     {
     }
 
     private val TAG: String = "KotlistView"
 
     private val mGestureDetector: GestureDetector = GestureDetector(getContext(), GestureListener());
-    private var mAdapter: ListAdapter? = null;
+    private var mAdapter: RecyclerAdapter? = null;
 
     private val mRecycleBin: RecycleBin = RecycleBin()
 
@@ -44,11 +49,6 @@ class KotlistView(context: Context, attrs: AttributeSet) : AdapterView<ListAdapt
         if (mAdapter == null)
             return;
 
-        mItemCount = mAdapter?.getCount() ?: 0;
-        for (i in 0..mItemCount) {
-            //getChildAt(i).forceLayout();
-        }
-
         var offset = 0
         if (getChildCount() == 0) {
             mLastVisibleItem = -1
@@ -68,7 +68,7 @@ class KotlistView(context: Context, attrs: AttributeSet) : AdapterView<ListAdapt
         mItemCount = mAdapter?.getCount() ?: 0;
     }
 
-    override fun getAdapter(): ListAdapter? {
+    override fun getAdapter(): RecyclerAdapter? {
         return mAdapter
     }
 
@@ -80,7 +80,7 @@ class KotlistView(context: Context, attrs: AttributeSet) : AdapterView<ListAdapt
         throw UnsupportedOperationException()
     }
 
-    override fun setAdapter(adapter: ListAdapter) {
+    override fun setAdapter(adapter: RecyclerAdapter) {
         mAdapter = adapter
         mItemCount = mAdapter?.getCount() ?: 0;
         requestLayout()
@@ -126,8 +126,17 @@ class KotlistView(context: Context, attrs: AttributeSet) : AdapterView<ListAdapt
     }
 
     fun obtainView(position: Int): View {
-        val cached = mRecycleBin.get(mAdapter!!.getItemViewType(position))
-        return mAdapter!!.getView(position, cached, this)
+        val cached: RecyclerView.ViewHolder? = mRecycleBin.get(mAdapter!!.getItemViewType(position))
+
+        if (cached == null) {
+            val viewHolder = mAdapter!!.onCreateViewHolder(this, position);
+            mAdapter!!.bindViewHolder(viewHolder, position)
+            viewHolder.itemView.setTag(R.id.KEY_ADAPTER_TAG, viewHolder);
+            return viewHolder.itemView
+        } else {
+            mAdapter!!.bindViewHolder(cached, position)
+            return cached.itemView
+        }
     }
 
     fun addChildAndMeasure(position: Int, above: Boolean): View {
@@ -160,7 +169,7 @@ class KotlistView(context: Context, attrs: AttributeSet) : AdapterView<ListAdapt
                 removeViewInLayout(firstChild);
                 childCount--;
 
-                mRecycleBin.put(mAdapter!!.getItemViewType(mFirstVisibleItem), firstChild)
+                mRecycleBin.put(mAdapter!!.getItemViewType(mFirstVisibleItem), firstChild.getTag(R.id.KEY_ADAPTER_TAG) as RecyclerView.ViewHolder)
                 mFirstVisibleItem++;
 
                 // Update list offset
@@ -177,15 +186,16 @@ class KotlistView(context: Context, attrs: AttributeSet) : AdapterView<ListAdapt
         }
 
 
+        // Remove views from bottom
         if (mFirstVisibleItem != 0 && childCount > 1) {
-            // check if we should remove any views in the bottom
+
             var lastChild = getChildAt(childCount - 1);
             while (lastChild.getTop() + offset > getHeight()) {
-                // remove the bottom view
+
                 removeViewInLayout(lastChild);
                 childCount--;
 
-                mRecycleBin.put(mAdapter!!.getItemViewType(mLastVisibleItem), lastChild);
+                mRecycleBin.put(mAdapter!!.getItemViewType(mLastVisibleItem), lastChild.getTag(R.id.KEY_ADAPTER_TAG) as RecyclerView.ViewHolder);
                 mLastVisibleItem--;
 
                 Log.v(TAG, "Removed view at bottom. Last visible item: " + mLastVisibleItem);
@@ -282,19 +292,66 @@ class KotlistView(context: Context, attrs: AttributeSet) : AdapterView<ListAdapt
     /*
      * Holds lists of our recycled views, put into buckets by view type
      */
-    class RecycleBin {
-        private val mItems: HashMap<Int, MutableList<View>> = HashMap()
+    inner class RecycleBin {
+        private val mItems: HashMap<Int, MutableList<RecyclerView.ViewHolder>> = HashMap()
 
-        fun put(viewType: Int, view: View) {
-            var views = mItems.getOrElse(viewType, { ArrayList<View>() });
+        fun put(viewType: Int, view: RecyclerView.ViewHolder) {
+            var views = mItems.getOrElse(viewType, { ArrayList<RecyclerView.ViewHolder>() });
             views.add(view)
+            mItems.put(viewType, views);
         }
 
-        fun get(viewType: Int): View? {
-            var views = mItems.getOrElse(viewType, { ArrayList<View>() });
-            return if (views.size() > 0) views.remove(0) else null
+        fun get(viewType: Int): RecyclerView.ViewHolder? {
+            var views = mItems.getOrElse(viewType, { ArrayList<RecyclerView.ViewHolder>() });
+            if (views.size() > 0) {
+                val holder = views.remove(0)
+                Log.v(TAG, "Cache hit for type: " + viewType)
+                return holder
+            } else {
+                Log.v(TAG, "Cache miss for type: " + viewType)
+                return null;
+            }
         }
 
+    }
+
+    public abstract class RecyclerAdapter() : RecyclerView.Adapter<RecyclerView.ViewHolder>(), ListAdapter {
+
+        private val mDataSetObservable = DataSetObservable()
+
+        override fun registerDataSetObserver(observer: DataSetObserver?) {
+            mDataSetObservable.registerObserver(observer)
+        }
+
+        override fun unregisterDataSetObserver(observer: DataSetObserver?) {
+            mDataSetObservable.unregisterObserver(observer)
+        }
+
+        override fun getCount(): Int {
+            return getItemCount()
+        }
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            throw UnsupportedOperationException()
+        }
+
+        override fun getViewTypeCount(): Int {
+            return 0
+        }
+
+        override fun isEmpty(): Boolean {
+            return getItemCount() == 0
+        }
+
+        override fun areAllItemsEnabled(): Boolean {
+            return true
+        }
+
+        override fun isEnabled(position: Int): Boolean {
+            return true
+        }
+
+        abstract override fun onCreateViewHolder(p0: ViewGroup?, p1: Int): RecyclerView.ViewHolder
     }
 
 }
